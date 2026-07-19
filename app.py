@@ -4,21 +4,20 @@ import numpy as np
 import gradio as gr
 from sentence_transformers import SentenceTransformer
 
-# =====================================================
+# ==========================================================
 # Configuration
-# =====================================================
+# ==========================================================
 
 INDEX_FILE = "vector_db/watch_index.faiss"
 CHUNKS_FILE = "vector_db/chunks.pkl"
-
 MODEL_NAME = "all-MiniLM-L6-v2"
 
 TOP_K = 3
 CONFIDENCE_THRESHOLD = 0.25
 
-# =====================================================
+# ==========================================================
 # Load Model
-# =====================================================
+# ==========================================================
 
 print("=" * 60)
 print("Loading Sentence Transformer...")
@@ -26,9 +25,9 @@ print("=" * 60)
 
 model = SentenceTransformer(MODEL_NAME)
 
-# =====================================================
-# Load Vector Database
-# =====================================================
+# ==========================================================
+# Load FAISS
+# ==========================================================
 
 print("Loading FAISS Index...")
 
@@ -39,9 +38,9 @@ with open(CHUNKS_FILE, "rb") as f:
 
 print("Vector Database Loaded Successfully!")
 
-# =====================================================
+# ==========================================================
 # Search Function
-# =====================================================
+# ==========================================================
 
 def search_documents(question):
 
@@ -79,123 +78,75 @@ def search_documents(question):
     return results
 
 
-# =====================================================
-# Build Answer
-# =====================================================
+# ==========================================================
+# Answer Builder
+# ==========================================================
 
 def build_answer(results):
 
-    if len(results) == 0:
+    if not results:
         return (
             "❌ Sorry.\n\n"
-            "I couldn't find relevant information "
-            "in the knowledge base."
+            "I couldn't find relevant information in the knowledge base."
         )
 
     best = results[0]
 
     if best["score"] < CONFIDENCE_THRESHOLD:
-
         return (
             "❌ Sorry.\n\n"
             "I couldn't find a confident answer.\n"
-            "Please ask your question differently."
+            "Please ask the question differently."
         )
 
-    answer = f"""
-## ✅ Answer
+    return f"""## ✅ Answer
 
 {best['text']}
 
 ---------------------------------------
 
-📄 Source:
-{best['source']}
+📄 **Source:** {best['source']}
 
-Confidence Score:
-{best['score']:.2f}
+⭐ **Confidence:** {best['score']:.2f}
 """
 
-    return answer
 
-
-# =====================================================
+# ==========================================================
 # Chat Function
-# =====================================================
+# ==========================================================
 
 def chatbot(message, history):
 
+    if not message.strip():
+        return "Please enter a question."
+
     results = search_documents(message)
 
-    answer = build_answer(results)
-
-    return answer
+    return build_answer(results)
 
 
-# =====================================================
-# Example Questions
-# =====================================================
-
-examples = [
-
-    "What brands do you sell?",
-
-    "Do you sell Rolex?",
-
-    "Do you have Seiko automatic watches?",
-
-    "What is the warranty for Tissot?",
-
-    "Do you provide EMI?",
-
-    "Can I exchange my old watch?",
-
-    "What are your shop timings?",
-
-    "What payment methods are accepted?"
-]
-
-# =====================================================
+# ==========================================================
 # Interface
-# =====================================================
+# ==========================================================
 
 demo = gr.ChatInterface(
-
     fn=chatbot,
-
     title="⌚ WatchExpert AI Chatbot",
-
-    description="""
-Welcome to WatchExpert AI.
-
-Ask questions about:
-
-• Watch Brands
-
-• Watch Models
-
-• Warranty
-
-• Shop Details
-
-• Offers
-
-• Returns
-
-• FAQs
-""",
-
-    examples=examples,
-
-    textbox=gr.Textbox(
-        placeholder="Type your question here..."
-    )
+    description="Ask questions about watches, warranty, returns, offers and shop details.",
+    examples=[
+        "What brands do you sell?",
+        "Do you sell Rolex?",
+        "What is the warranty?",
+        "Do you provide EMI?",
+        "Can I exchange my old watch?",
+        "What are your shop timings?",
+        "What payment methods are accepted?"
+    ]
 )
 
-# =====================================================
+# ==========================================================
 # Launch
-# =====================================================
+# ==========================================================
 
-demo.launch(
-    share=True
-)
+if __name__ == "__main__":
+    demo.launch(share=True)
