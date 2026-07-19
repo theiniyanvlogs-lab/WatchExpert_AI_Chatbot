@@ -6,9 +6,10 @@ import numpy as np
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 
-# -----------------------------
+# ==========================================================
 # Configuration
-# -----------------------------
+# ==========================================================
+
 KNOWLEDGE_FOLDER = "knowledge"
 VECTOR_DB_FOLDER = "vector_db"
 
@@ -16,127 +17,181 @@ INDEX_FILE = os.path.join(VECTOR_DB_FOLDER, "watch_index.faiss")
 CHUNKS_FILE = os.path.join(VECTOR_DB_FOLDER, "chunks.pkl")
 
 MODEL_NAME = "all-MiniLM-L6-v2"
-CHUNK_SIZE = 500
-OVERLAP = 100
 
-# -----------------------------
-# Load Embedding Model
-# -----------------------------
+MIN_CHUNK_LENGTH = 50
+
+# ==========================================================
+# Load Sentence Transformer
+# ==========================================================
+
+print("=" * 60)
 print("Loading Sentence Transformer Model...")
+print("=" * 60)
+
 model = SentenceTransformer(MODEL_NAME)
 
-# -----------------------------
+# ==========================================================
 # Read PDFs
-# -----------------------------
-def read_pdfs(folder_path):
+# ==========================================================
+
+def read_pdfs(folder):
+
     documents = []
 
-    for filename in os.listdir(folder_path):
-        if filename.lower().endswith(".pdf"):
-            pdf_path = os.path.join(folder_path, filename)
+    pdf_files = sorted(
+        [
+            f for f in os.listdir(folder)
+            if f.lower().endswith(".pdf")
+        ]
+    )
 
-            print(f"Reading: {filename}")
+    for filename in pdf_files:
 
-            reader = PdfReader(pdf_path)
+        print(f"Reading: {filename}")
 
-            text = ""
+        pdf_path = os.path.join(folder, filename)
 
-            for page in reader.pages:
-                page_text = page.extract_text()
+        reader = PdfReader(pdf_path)
 
-                if page_text:
-                    text += page_text + "\n"
+        full_text = ""
 
-            documents.append({
-                "filename": filename,
-                "text": text
-            })
+        for page_number, page in enumerate(reader.pages, start=1):
+
+            text = page.extract_text()
+
+            if text:
+
+                full_text += text
+                full_text += "\n\n"
+
+        documents.append(
+            {
+                "source": filename,
+                "text": full_text
+            }
+        )
 
     return documents
 
-# -----------------------------
-# Split Text into Chunks
-# -----------------------------
-def split_text(text, chunk_size=500, overlap=100):
 
-    chunks = []
+# ==========================================================
+# Better Text Splitter
+# ==========================================================
 
-    start = 0
+def split_text(text):
 
-    while start < len(text):
+    paragraphs = []
 
-        end = start + chunk_size
+    text = text.replace("\r", "")
 
-        chunk = text[start:end]
+    blocks = text.split("\n\n")
 
-        chunks.append(chunk)
+    for block in blocks:
 
-        start += chunk_size - overlap
+        block = block.strip()
 
-    return chunks
+        if len(block) < MIN_CHUNK_LENGTH:
+            continue
 
-# -----------------------------
-# Build Dataset
-# -----------------------------
+        paragraphs.append(block)
+
+    return paragraphs
+
+
+# ==========================================================
+# Read Knowledge Base
+# ==========================================================
+
+print("\nLoading PDFs...\n")
+
 documents = read_pdfs(KNOWLEDGE_FOLDER)
 
 all_chunks = []
 
+seen = set()
+
 for doc in documents:
 
-    chunks = split_text(doc["text"], CHUNK_SIZE, OVERLAP)
+    chunks = split_text(doc["text"])
 
     for chunk in chunks:
 
-        if len(chunk.strip()) > 30:
+        key = chunk.strip()
 
-            all_chunks.append({
-                "source": doc["filename"],
+        if key in seen:
+            continue
+
+        seen.add(key)
+
+        all_chunks.append(
+            {
+                "source": doc["source"],
                 "text": chunk
-            })
+            }
+        )
 
-print(f"\nTotal Chunks: {len(all_chunks)}")
+print("\n" + "=" * 60)
+print("Knowledge Base Summary")
+print("=" * 60)
 
-# -----------------------------
-# Create Embeddings
-# -----------------------------
-texts = [c["text"] for c in all_chunks]
+print(f"PDF Files : {len(documents)}")
+print(f"Chunks    : {len(all_chunks)}")
 
-print("Generating Embeddings...")
+# ==========================================================
+# Generate Embeddings
+# ==========================================================
+
+texts = [item["text"] for item in all_chunks]
+
+print("\nGenerating Embeddings...\n")
 
 embeddings = model.encode(
     texts,
-    show_progress_bar=True,
-    convert_to_numpy=True
+    convert_to_numpy=True,
+    show_progress_bar=True
 )
 
-embeddings = embeddings.astype("float32")
+embeddings = embeddings.astype(np.float32)
 
-# -----------------------------
+# Normalize embeddings for cosine similarity
+
+faiss.normalize_L2(embeddings)
+
+# ==========================================================
 # Build FAISS Index
-# -----------------------------
+# ==========================================================
+
 dimension = embeddings.shape[1]
 
-index = faiss.IndexFlatL2(dimension)
+index = faiss.IndexFlatIP(dimension)
 
 index.add(embeddings)
 
-# -----------------------------
-# Save Vector Database
-# -----------------------------
+# ==========================================================
+# Save Database
+# ==========================================================
+
 os.makedirs(VECTOR_DB_FOLDER, exist_ok=True)
 
 faiss.write_index(index, INDEX_FILE)
 
 with open(CHUNKS_FILE, "wb") as f:
+
     pickle.dump(all_chunks, f)
 
-print("\n===================================")
+# ==========================================================
+# Finished
+# ==========================================================
+
+print("\n" + "=" * 60)
 print("WatchExpert AI Chatbot")
-print("Vector Database Created Successfully!")
-print("===================================")
+print("Vector Database Created Successfully")
+print("=" * 60)
 
 print(f"PDF Files Processed : {len(documents)}")
 print(f"Text Chunks         : {len(all_chunks)}")
-print(f"FAISS Index Saved   : {INDEX_FILE}")
-print(f"Chunks Saved        : {CHUNKS_FILE}")
+print(f"Embedding Model     : {MODEL_NAME}")
+print(f"FAISS Index         : {INDEX_FILE}")
+print(f"Chunks File         : {CHUNKS_FILE}")
+
+print("\nReady to launch app.py")
