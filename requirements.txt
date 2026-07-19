@@ -1,1 +1,6 @@
-s
+gradio
+faiss-cpu
+sentence-transformers
+pypdf
+numpy
+pandas
