@@ -1,197 +1,175 @@
-import os
+import re
 import pickle
 import faiss
 import numpy as np
-
-from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 
 # ==========================================================
 # Configuration
 # ==========================================================
 
-KNOWLEDGE_FOLDER = "knowledge"
-VECTOR_DB_FOLDER = "vector_db"
-
-INDEX_FILE = os.path.join(VECTOR_DB_FOLDER, "watch_index.faiss")
-CHUNKS_FILE = os.path.join(VECTOR_DB_FOLDER, "chunks.pkl")
+INDEX_FILE = "vector_db/watch_index.faiss"
+CHUNKS_FILE = "vector_db/chunks.pkl"
 
 MODEL_NAME = "all-MiniLM-L6-v2"
 
-MIN_CHUNK_LENGTH = 50
+TOP_K = 5
+CONFIDENCE_THRESHOLD = 0.30
 
 # ==========================================================
-# Load Sentence Transformer
+# Load Model
 # ==========================================================
 
 print("=" * 60)
-print("Loading Sentence Transformer Model...")
+print("Loading Sentence Transformer...")
 print("=" * 60)
 
 model = SentenceTransformer(MODEL_NAME)
 
 # ==========================================================
-# Read PDFs
+# Load Vector Database
 # ==========================================================
 
-def read_pdfs(folder):
+print("Loading FAISS Index...")
 
-    documents = []
+index = faiss.read_index(INDEX_FILE)
 
-    pdf_files = sorted(
-        [
-            f for f in os.listdir(folder)
-            if f.lower().endswith(".pdf")
+with open(CHUNKS_FILE, "rb") as f:
+    chunks = pickle.load(f)
+
+print("Vector Database Loaded Successfully!")
+
+# ==========================================================
+# Search Documents
+# ==========================================================
+
+def search_documents(question):
+
+    embedding = model.encode(
+        [question],
+        convert_to_numpy=True
+    ).astype(np.float32)
+
+    faiss.normalize_L2(embedding)
+
+    scores, indices = index.search(embedding, TOP_K)
+
+    results = []
+
+    for score, idx in zip(scores[0], indices[0]):
+
+        if idx == -1:
+            continue
+
+        results.append({
+            "score": float(score),
+            "source": chunks[idx]["source"],
+            "text": chunks[idx]["text"]
+        })
+
+    return results
+
+
+# ==========================================================
+# Build Short Answer
+# ==========================================================
+
+def build_answer(question):
+
+    results = search_documents(question)
+
+    if len(results) == 0:
+        return (
+            "❌ Sorry.\n\n"
+            "No relevant information found."
+        )
+
+    best = results[0]
+
+    if best["score"] < CONFIDENCE_THRESHOLD:
+        return (
+            "❌ Sorry.\n\n"
+            "I couldn't find a confident answer."
+        )
+
+    text = best["text"]
+
+    # Split into sentences
+    sentences = re.split(r'(?<=[.!?])\s+', text.replace("\n", " "))
+
+    keywords = [
+        word.lower()
+        for word in re.findall(r"\w+", question)
+        if len(word) > 2
+    ]
+
+    matched = []
+
+    for sentence in sentences:
+
+        sentence = sentence.strip()
+
+        if len(sentence) < 20:
+            continue
+
+        score = 0
+
+        lower = sentence.lower()
+
+        for word in keywords:
+
+            if word in lower:
+                score += 1
+
+        if score > 0:
+            matched.append((score, sentence))
+
+    matched.sort(reverse=True)
+
+    answer = []
+
+    for score, sentence in matched:
+
+        if sentence not in answer:
+            answer.append(sentence)
+
+        if len(answer) == 3:
+            break
+
+    # Fallback
+    if len(answer) == 0:
+
+        answer = [
+            text[:350] + "..."
         ]
-    )
 
-    for filename in pdf_files:
+    response = f"""
+## ✅ Answer
 
-        print(f"Reading: {filename}")
+{" ".join(answer)}
 
-        pdf_path = os.path.join(folder, filename)
+---------------------------------------
 
-        reader = PdfReader(pdf_path)
+📄 Source : {best['source']}
 
-        full_text = ""
+⭐ Confidence : {best['score']:.2f}
+"""
 
-        for page_number, page in enumerate(reader.pages, start=1):
-
-            text = page.extract_text()
-
-            if text:
-
-                full_text += text
-                full_text += "\n\n"
-
-        documents.append(
-            {
-                "source": filename,
-                "text": full_text
-            }
-        )
-
-    return documents
+    return response
 
 
 # ==========================================================
-# Better Text Splitter
+# Chat Function
 # ==========================================================
 
-def split_text(text):
+def chatbot(message, history=None):
 
-    paragraphs = []
+    if message is None:
+        return "Please enter a question."
 
-    text = text.replace("\r", "")
+    message = message.strip()
 
-    blocks = text.split("\n\n")
+    if message == "":
+        return "Please enter a question."
 
-    for block in blocks:
-
-        block = block.strip()
-
-        if len(block) < MIN_CHUNK_LENGTH:
-            continue
-
-        paragraphs.append(block)
-
-    return paragraphs
-
-
-# ==========================================================
-# Read Knowledge Base
-# ==========================================================
-
-print("\nLoading PDFs...\n")
-
-documents = read_pdfs(KNOWLEDGE_FOLDER)
-
-all_chunks = []
-
-seen = set()
-
-for doc in documents:
-
-    chunks = split_text(doc["text"])
-
-    for chunk in chunks:
-
-        key = chunk.strip()
-
-        if key in seen:
-            continue
-
-        seen.add(key)
-
-        all_chunks.append(
-            {
-                "source": doc["source"],
-                "text": chunk
-            }
-        )
-
-print("\n" + "=" * 60)
-print("Knowledge Base Summary")
-print("=" * 60)
-
-print(f"PDF Files : {len(documents)}")
-print(f"Chunks    : {len(all_chunks)}")
-
-# ==========================================================
-# Generate Embeddings
-# ==========================================================
-
-texts = [item["text"] for item in all_chunks]
-
-print("\nGenerating Embeddings...\n")
-
-embeddings = model.encode(
-    texts,
-    convert_to_numpy=True,
-    show_progress_bar=True
-)
-
-embeddings = embeddings.astype(np.float32)
-
-# Normalize embeddings for cosine similarity
-
-faiss.normalize_L2(embeddings)
-
-# ==========================================================
-# Build FAISS Index
-# ==========================================================
-
-dimension = embeddings.shape[1]
-
-index = faiss.IndexFlatIP(dimension)
-
-index.add(embeddings)
-
-# ==========================================================
-# Save Database
-# ==========================================================
-
-os.makedirs(VECTOR_DB_FOLDER, exist_ok=True)
-
-faiss.write_index(index, INDEX_FILE)
-
-with open(CHUNKS_FILE, "wb") as f:
-
-    pickle.dump(all_chunks, f)
-
-# ==========================================================
-# Finished
-# ==========================================================
-
-print("\n" + "=" * 60)
-print("WatchExpert AI Chatbot")
-print("Vector Database Created Successfully")
-print("=" * 60)
-
-print(f"PDF Files Processed : {len(documents)}")
-print(f"Text Chunks         : {len(all_chunks)}")
-print(f"Embedding Model     : {MODEL_NAME}")
-print(f"FAISS Index         : {INDEX_FILE}")
-print(f"Chunks File         : {CHUNKS_FILE}")
-
-print("\nReady to launch app.py")
+    return build_answer(message)
