@@ -11,8 +11,7 @@ demo = gr.ChatInterface(
         "Do you provide EMI?",
         "Can I exchange my old watch?",
         "What are your shop timings?"
-    ],
-    
+    ]
 )
 
 if __name__ == "__main__":
