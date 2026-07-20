@@ -12,7 +12,7 @@ demo = gr.ChatInterface(
         "Can I exchange my old watch?",
         "What are your shop timings?"
     ],
-    theme=gr.themes.Soft()
+    
 )
 
 if __name__ == "__main__":
