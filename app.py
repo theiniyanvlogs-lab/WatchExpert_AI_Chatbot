@@ -1,3 +1,4 @@
+import re
 import pickle
 import faiss
 import numpy as np
@@ -10,10 +11,11 @@ from sentence_transformers import SentenceTransformer
 
 INDEX_FILE = "vector_db/watch_index.faiss"
 CHUNKS_FILE = "vector_db/chunks.pkl"
+
 MODEL_NAME = "all-MiniLM-L6-v2"
 
-TOP_K = 3
-CONFIDENCE_THRESHOLD = 0.25
+TOP_K = 5
+CONFIDENCE_THRESHOLD = 0.30
 
 # ==========================================================
 # Load Model
@@ -26,10 +28,10 @@ print("=" * 60)
 model = SentenceTransformer(MODEL_NAME)
 
 # ==========================================================
-# Load FAISS
+# Load Vector Database
 # ==========================================================
 
-print("Loading FAISS Index...")
+print("Loading Vector Database...")
 
 index = faiss.read_index(INDEX_FILE)
 
@@ -39,7 +41,7 @@ with open(CHUNKS_FILE, "rb") as f:
 print("Vector Database Loaded Successfully!")
 
 # ==========================================================
-# Search Function
+# Search
 # ==========================================================
 
 def search_documents(question):
@@ -62,53 +64,87 @@ def search_documents(question):
         if idx == -1:
             continue
 
-        item = chunks[idx]
+        chunk = chunks[idx]
 
-        if item["text"] in seen:
+        if chunk["text"] in seen:
             continue
 
-        seen.add(item["text"])
+        seen.add(chunk["text"])
 
-        results.append({
-            "score": float(score),
-            "source": item["source"],
-            "text": item["text"]
-        })
+        results.append(
+            {
+                "score": float(score),
+                "source": chunk["source"],
+                "text": chunk["text"]
+            }
+        )
 
     return results
 
 
 # ==========================================================
-# Answer Builder
+# Build Answer
 # ==========================================================
 
 def build_answer(results):
 
-    if not results:
+    if len(results) == 0:
+
         return (
-            "❌ Sorry.\n\n"
-            "I couldn't find relevant information in the knowledge base."
+            "❌ Sorry!\n\n"
+            "I couldn't find relevant information."
         )
 
     best = results[0]
 
     if best["score"] < CONFIDENCE_THRESHOLD:
+
         return (
-            "❌ Sorry.\n\n"
-            "I couldn't find a confident answer.\n"
-            "Please ask the question differently."
+            "❌ Sorry!\n\n"
+            "I couldn't find a confident answer."
         )
 
-    return f"""## ✅ Answer
+    text = best["text"].replace("\n", " ")
 
-{best['text']}
+    sentences = re.split(r'(?<=[.!?])\s+', text)
 
----------------------------------------
+    final_sentences = []
 
-📄 **Source:** {best['source']}
+    for sentence in sentences:
 
-⭐ **Confidence:** {best['score']:.2f}
+        sentence = sentence.strip()
+
+        if len(sentence) < 20:
+            continue
+
+        if sentence not in final_sentences:
+            final_sentences.append(sentence)
+
+        if len(final_sentences) == 5:
+            break
+
+    if len(final_sentences) == 0:
+        answer = text[:500]
+    else:
+        answer = "\n\n".join(final_sentences)
+
+    response = f"""
+## ✅ Answer
+
+{answer}
+
+---
+
+📄 **Source**
+
+{best["source"]}
+
+⭐ **Confidence**
+
+{best["score"]:.2f}
 """
+
+    return response
 
 
 # ==========================================================
@@ -118,7 +154,8 @@ def build_answer(results):
 def chatbot(message, history):
 
     if not message.strip():
-        return "Please enter a question."
+
+        return "Please enter your question."
 
     results = search_documents(message)
 
@@ -126,22 +163,43 @@ def chatbot(message, history):
 
 
 # ==========================================================
-# Interface
+# Gradio Interface
 # ==========================================================
 
 demo = gr.ChatInterface(
     fn=chatbot,
+
     title="⌚ WatchExpert AI Chatbot",
-    description="Ask questions about watches, warranty, returns, offers and shop details.",
+
+    description="""
+Ask questions about:
+
+• Watch Brands
+• Rolex
+• Omega
+• Warranty
+• Returns
+• Exchange
+• EMI
+• Payment Methods
+• Shop Timings
+• Offers
+""",
+
     examples=[
-        "What brands do you sell?",
         "Do you sell Rolex?",
+        "Which brands are available?",
         "What is the warranty?",
-        "Do you provide EMI?",
         "Can I exchange my old watch?",
+        "Do you provide EMI?",
         "What are your shop timings?",
-        "What payment methods are accepted?"
-    ]
+        "Which payment methods are accepted?",
+        "Tell me about Seiko watches",
+        "Do you have Casio?",
+        "What is the return policy?"
+    ],
+
+    theme=gr.themes.Soft()
 )
 
 # ==========================================================
@@ -149,4 +207,5 @@ demo = gr.ChatInterface(
 # ==========================================================
 
 if __name__ == "__main__":
-    demo.launch(share=True)
+
+    demo.launch(debug=True, share=True)
