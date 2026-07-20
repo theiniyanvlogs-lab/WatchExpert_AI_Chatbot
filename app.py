@@ -3,25 +3,19 @@ from chatbot import chatbot
 
 demo = gr.ChatInterface(
     fn=chatbot,
-
     title="⌚ WatchExpert AI Chatbot",
-
     description="Ask questions about watches, warranty, returns, offers and shop details.",
-
     examples=[
         "Do you sell Rolex?",
         "What is the warranty?",
         "Do you provide EMI?",
         "Can I exchange my old watch?",
-        "What are your shop timings?",
-        "Which payment methods are accepted?"
+        "What are your shop timings?"
     ],
-
     theme=gr.themes.Soft()
 )
 
 if __name__ == "__main__":
-
     demo.launch(
         share=True,
         debug=True
