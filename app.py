@@ -2,7 +2,6 @@ import re
 import pickle
 import faiss
 import numpy as np
-import gradio as gr
 from sentence_transformers import SentenceTransformer
 
 # ==========================================================
@@ -31,7 +30,7 @@ model = SentenceTransformer(MODEL_NAME)
 # Load Vector Database
 # ==========================================================
 
-print("Loading Vector Database...")
+print("Loading FAISS Index...")
 
 index = faiss.read_index(INDEX_FILE)
 
@@ -41,7 +40,7 @@ with open(CHUNKS_FILE, "rb") as f:
 print("Vector Database Loaded Successfully!")
 
 # ==========================================================
-# Search
+# Search Function
 # ==========================================================
 
 def search_documents(question):
@@ -81,34 +80,22 @@ def search_documents(question):
 
     return results
 
-
 # ==========================================================
-# Build Answer
+# Extract Short Answer
 # ==========================================================
 
-def build_answer(results):
+def extract_short_answer(text, question):
 
-    if len(results) == 0:
+    # Split into sentences
+    sentences = re.split(r'(?<=[.!?])\s+', text.replace("\n", " "))
 
-        return (
-            "❌ Sorry!\n\n"
-            "I couldn't find relevant information."
-        )
+    question_words = set(
+        word.lower()
+        for word in re.findall(r"\w+", question)
+        if len(word) > 2
+    )
 
-    best = results[0]
-
-    if best["score"] < CONFIDENCE_THRESHOLD:
-
-        return (
-            "❌ Sorry!\n\n"
-            "I couldn't find a confident answer."
-        )
-
-    text = best["text"].replace("\n", " ")
-
-    sentences = re.split(r'(?<=[.!?])\s+', text)
-
-    final_sentences = []
+    scored = []
 
     for sentence in sentences:
 
@@ -117,95 +104,80 @@ def build_answer(results):
         if len(sentence) < 20:
             continue
 
-        if sentence not in final_sentences:
-            final_sentences.append(sentence)
+        words = set(
+            word.lower()
+            for word in re.findall(r"\w+", sentence)
+        )
 
-        if len(final_sentences) == 5:
-            break
+        score = len(question_words.intersection(words))
 
-    if len(final_sentences) == 0:
-        answer = text[:500]
-    else:
-        answer = "\n\n".join(final_sentences)
+        scored.append((score, sentence))
+
+    scored.sort(reverse=True)
+
+    answer = []
+
+    for score, sentence in scored[:3]:
+
+        if sentence not in answer:
+            answer.append(sentence)
+
+    if answer:
+        return "\n\n".join(answer)
+
+    return text[:350]
+
+# ==========================================================
+# Build Answer
+# ==========================================================
+
+def build_answer(question):
+
+    results = search_documents(question)
+
+    if not results:
+
+        return (
+            "❌ Sorry.\n\n"
+            "No relevant information found."
+        )
+
+    best = results[0]
+
+    if best["score"] < CONFIDENCE_THRESHOLD:
+
+        return (
+            "❌ Sorry.\n\n"
+            "I couldn't find a confident answer."
+        )
+
+    answer = extract_short_answer(
+        best["text"],
+        question
+    )
 
     response = f"""
 ## ✅ Answer
 
 {answer}
 
----
+----------------------------------------
 
-📄 **Source**
+📄 Source : {best['source']}
 
-{best["source"]}
-
-⭐ **Confidence**
-
-{best["score"]:.2f}
+⭐ Confidence : {best['score']:.2f}
 """
 
     return response
-
 
 # ==========================================================
 # Chat Function
 # ==========================================================
 
-def chatbot(message, history):
+def chatbot(message, history=None):
 
-    if not message.strip():
+    if message is None or not message.strip():
 
         return "Please enter your question."
 
-    results = search_documents(message)
-
-    return build_answer(results)
-
-
-# ==========================================================
-# Gradio Interface
-# ==========================================================
-
-demo = gr.ChatInterface(
-    fn=chatbot,
-
-    title="⌚ WatchExpert AI Chatbot",
-
-    description="""
-Ask questions about:
-
-• Watch Brands
-• Rolex
-• Omega
-• Warranty
-• Returns
-• Exchange
-• EMI
-• Payment Methods
-• Shop Timings
-• Offers
-""",
-
-    examples=[
-        "Do you sell Rolex?",
-        "Which brands are available?",
-        "What is the warranty?",
-        "Can I exchange my old watch?",
-        "Do you provide EMI?",
-        "What are your shop timings?",
-        "Which payment methods are accepted?",
-        "Tell me about Seiko watches",
-        "Do you have Casio?",
-        "What is the return policy?"
-    ],
-
-    theme=gr.themes.Soft()
-)
-
-# ==========================================================
-# Launch
-# ==========================================================
-
-if __name__ == "__main__":
-
-    demo.launch(debug=True, share=True)
+    return build_answer(message)
